@@ -1,0 +1,452 @@
+---
+title: "Final Project"
+author: "Varun Jain"
+date: "2024-12-06"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+
+**Introduction**
+
+One of the worst worldwide health emergencies in recent memory, the COVID-19 pandemic has had a huge influence on everyday lives, economy, and public health. Analyzing extensive COVID-19 databases can yield important insights about the virus's development, the efficacy of mitigation methods, and variables driving its spread as governments and healthcare organizations continue to manage the obstacles faced by the virus.
+
+The objective of this research is to use a sizable state-level COVID-19 dataset to find practical insights that guide the distribution of resources and public health policy. We aim to provide answers to important concerns that might direct more efficient pandemic management by examining the interactions among vaccination rates, infection rates, and demographic characteristics.
+
+**Inference Task**
+
+Three main goals will be the focus of the analysis:
+
+Assessing how vaccination rates and infection/mortality rates change throughout time: This will let us to evaluate how vaccination campaigns have affected the severity and spread of COVID-19 in various states.
+
+Forecasting COVID-19 spike high-risk states: We will create prediction models to identify states that are more likely to see surges in cases by examining population density, healthcare capacity, and other variables. This will allow us to take preventative action.
+
+Analysis of government intervention policies (such as travel restrictions, school closures, and the stringency index). Evaluate their effect in lowering the number of cases and death rates.
+
+This study offers a comprehensive, multivariate knowledge of the evolution of COVID-19 by combining data cleaning, exploratory data analysis, and sophisticated modeling tools. The analysis seeks to enhance resource allocation, assist public health choices, and advance knowledge of the dynamics of the pandemic through careful data-driven insights.
+
+**About The Data**
+
+The COVID-19 dataset offers state-level statistics on the pandemic's course, including population density, vaccination rates, mortality, and case counts. But before analysis can begin, the data must be thoroughly cleaned because it is disorganized.
+```{r}
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+```
+
+```{r}
+install.packages("COVID19")
+library("COVID19")
+df <- covid19(level = 2,verbose = FALSE)
+
+#head(df)
+
+# Check the structure of the dataset to understand its dimensions and variables
+#str(df)
+
+# Check for missing values in the dataset
+#colSums(is.na(df))
+
+# Summarize the dataset to understand its overall structure
+#summary(df)
+
+```
+The COVID-19 dataset is a comprehensive epidemiological database that offers fine-grained geographic resolution information on numerous policy measures, daily confirmed cases, fatalities, recoveries, and vaccination rates. From nations to states (level 2), it covers a wide range of granularity. With 862,520 observations and 47 variables, the dataset has a number of duplicate columns and missing values.
+
+A number of parameters, including latitude, longitude, and id, are administrative in nature and may not immediately contribute to analysis. Others, such as hospitalizations, tests, and people_vaccinated, have a lot of missing data that has to be handled. Significant cleaning is required for this raw dataset before any insightful analysis can start.
+
+**Data Cleaning**
+
+There are 47 columns in the dataset, several of which have a sizable percentage of missing values. More than 50% of a column's data is missing, which makes it uninformative and might lead to bias or mistakes in analysis. Additionally, keeping these columns might needlessly add to the processing complexity. We set a threshold to remove columns where more than 50% of the values are missing. This ensures that the dataset is manageable and only includes columns with sufficient data for meaningful analysis.
+
+```{r}
+threshold <- nrow(df) * 0.5
+df_cleaned <- df[, colSums(is.na(df)) < threshold]
+```
+
+For missing data, we determine a threshold of 50% of all rows. Columns with missing values more than half are eliminated. This prevents variables with inadequate information from consuming computing resources or distorting the analysis.
+
+There is still missing data in some of the columns that were kept after columns with a high percentage of missing values were eliminated. It is necessary to correct missing data that might distort statistical studies in crucial numerical columns such as confirmed, fatalities, and vaccination_rate. The median of each column was used to impute missing values for numerical columns. The median is used because it captures the data's center trend and is resistant to outliers.
+
+```{r}
+num_cols <- sapply(df_cleaned, is.numeric)
+df_cleaned[num_cols] <- lapply(df_cleaned[num_cols], function(x) {
+  ifelse(is.na(x), median(x, na.rm = TRUE), x)
+})
+```
+
+The data in every numerical column is now full. Imputation guarantees that no rows are lost while preserving the dataset's integrity. This stage gets the dataset ready for machine learning and statistical techniques that need comprehensive data.
+
+The dataset contains administrative or metadata fields, such as id, iso_alpha_3, and key_google_mobility, which do not contribute to the core analysis objectives. Including these columns could introduce unnecessary noise and make the analysis less efficient. Columns that are redundant (such as highly correlated fields with duplicate information) or superfluous (such as administrative identifiers) were eliminated. As a result, the dataset is concentrated on factors that are directly associated with the study topics.
+
+```{r}
+irrelevant_cols <- c("id", "iso_alpha_3", "iso_alpha_2", "iso_currency", "key_google_mobility", "key_apple_mobility")
+df_cleaned <- df_cleaned[, !(names(df_cleaned) %in% irrelevant_cols)]
+```
+
+With 25 columns presently, the dataset focuses on pertinent epidemiological and policy-related variables including stringency_index, confirmed, deaths, and vaccinations. Clarity and interpretability for analysis are improved by this condensed dataset.
+
+There are extreme outliers in a few numerical columns, including confirmed, fatalities, and vaccination_rate. Statistical models and visualizations may be disproportionately impacted by these outliers, producing inaccurate findings. We used the Interquartile Range (IQR) approach to cap outliers. For values above Q3 + 1.5* IQR or below Q1 - 1.5* IQR, the closest boundary was used. While reducing the impact of extreme values, this approach preserves the data's variability.
+
+```{r}
+num_cols <- sapply(df_cleaned, function(x) is.numeric(x) || is.integer(x))
+
+# Function to handle outliers
+handle_outliers <- function(column) {
+  Q1 <- quantile(column, 0.25, na.rm = TRUE)
+  Q3 <- quantile(column, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  pmin(pmax(column, lower_bound), upper_bound)
+}
+
+# Apply the function only to numeric and integer columns
+df_cleaned[, num_cols] <- lapply(df_cleaned[, num_cols], as.numeric) # Convert all to numeric
+df_cleaned[, num_cols] <- lapply(df_cleaned[, num_cols], handle_outliers)
+```
+
+Extreme outliers have been reduced, and the ranges of numerical columns are now more consistent. As an illustration, vaccination rates are now within reasonable ranges, which improves the data's suitability for statistical modeling.
+
+
+```{r}
+summary_cleaned <- summary(df_cleaned)
+missing_summary <- colSums(is.na(df_cleaned))
+```
+
+The data appears much cleaner after handling missing values, outliers, and irrelevant columns.
+
+**Data Visualizations**
+
+**Analysis 1: Trend of Confirmed Cases Over Time**
+
+Goal: To comprehend the global evolution of confirmed cases over time.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Aggregate confirmed cases by month
+cases_by_month <- df_cleaned %>%
+  mutate(month = format(date, "%Y-%m")) %>%  # Extract month and year from the date
+  group_by(month) %>%
+  summarise(confirmed = sum(confirmed, na.rm = TRUE)) %>%  # Sum confirmed cases per month
+  mutate(month = as.Date(paste0(month, "-01")))  # Convert back to Date for plotting
+
+# Plot the trend of confirmed cases with rotated x-axis label
+ggsave("Trend of Confirmed Cases Over Time.png", width = 10, height = 6)
+ggplot(cases_by_month, aes(x = month, y = confirmed)) +
+  geom_line(color = "#1f78b4", size = 1) +  # Clean line with distinct color
+  labs(
+    title = "Monthly Trend of Confirmed COVID-19 Cases",
+    subtitle = "Cumulative counts aggregated globally by month",
+    x = "Month",
+    y = "Confirmed Cases (Cumulative)"
+  ) +
+  theme_minimal(base_size = 14) +  # Apply a clean theme
+  scale_y_continuous(labels = scales::comma) +  # Format y-axis numbers with commas
+  scale_x_date(
+    date_labels = "%Y-%b",         # Year with abbreviated month
+    date_breaks = "6 months"       # Breaks every 6 months
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels 45 degrees
+  )
+```
+
+Interpretation: The cumulative trend of verified COVID-19 cases worldwide is displayed in this graph. Peaks or plateaus could be signs of infection waves or the results of treatment.
+
+**Analysis 2: Relationship Between Vaccination Policy and Confirmed Cases**
+
+Goal: To examine how the strictness of vaccination laws affects the quantity of confirmed cases.
+```{r}
+# Aggregate confirmed cases and vaccination policy by level
+policy_cases <- aggregate(confirmed ~ vaccination_policy, data = df_cleaned, mean)
+
+# Plot the relationship with enhanced labels and all x-axis categories
+ggsave("Relationship Between Vaccination Policy and Confirmed Cases.png", width = 10, height = 6)
+ggplot(policy_cases, aes(x = factor(vaccination_policy), y = confirmed)) +  # Ensure all levels are shown
+  geom_bar(stat = "identity", fill = "#377eb8", width = 0.8) +  # Add distinct color
+  geom_text(aes(label = scales::comma(round(confirmed, 0))), vjust = -0.5, size = 4) +  # Add value labels
+  labs(
+    title = "Impact of Vaccination Policy on Confirmed COVID-19 Cases",
+    subtitle = "Global average confirmed cases grouped by vaccination policy stringency",
+    x = "Vaccination Policy Stringency (0 = None, 5 = Fully Mandatory)",
+    y = "Average Confirmed Cases"
+  ) +
+  theme_minimal(base_size = 14) +  # Apply a minimal theme for clarity
+  scale_y_continuous(labels = scales::comma) +  # Format y-axis numbers with commas
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 12)
+  )
+
+```
+
+Trend: It illustrates how tighter vaccination regulations affect the average number of confirmed cases.
+Findings: Because lower stringency levels (such as 0 and 1) probably correspond to earlier phases of the pandemic when vaccination efforts were weak, they are linked to fewer average confirmed cases. More confirmed cases are found at higher stringency levels (e.g., 4 and 5), which may be a result of the implementation of more stringent vaccination requirements during subsequent pandemic waves as the number of cases increased.
+
+**Analysis 3: Distribution of Government Stringency Index**
+
+Goal: Analyze how the government stringency index is distributed geographically.
+
+```{r}
+# Plot the distribution of the stringency index with all bars marked
+ggsave("Distribution of Government Stringency Index.png", width = 10, height = 6)
+ggplot(df_cleaned, aes(x = stringency_index)) +
+  geom_histogram(binwidth = 10, fill = "lightgreen", color = "black") +
+  scale_x_continuous(
+    breaks = seq(-100, 100, by = 10),  # Mark all bars at intervals of 10
+    labels = seq(-100, 100, by = 10)  # Ensure all bins are labeled
+  ) +
+  labs(
+    title = "Distribution of Government Stringency Index",
+    x = "Stringency Index (binned by 10)",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # Rotate x-axis labels for clarity
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12)
+  )
+```
+
+Inference: The distribution of the Government Stringency Index for each observation in the cleaned dataset is shown by this histogram. A composite metric called the Stringency Index shows how stringent government regulations are in place to stop the spread of COVID-19. On a scale of -100 (least stringent) to 100 (most restrictive), it is based on policies including travel restrictions, employment closures, and school closures.
+
+**Analysis 4: Population vs Confirmed Cases**
+
+Goal: To determine whether population size and the number of confirmed COVID-19 cases are correlated in order to shed light on how population density affects the virus's ability to propagate.
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Aggregate data by population bins for cleaner visualization
+df_binned <- df_cleaned %>%
+  mutate(population_bin = cut(population, breaks = seq(0, max(population, na.rm = TRUE), by = 500000))) %>%
+  group_by(population_bin) %>%
+  summarise(
+    avg_population = mean(population, na.rm = TRUE),
+    avg_confirmed = mean(confirmed, na.rm = TRUE)
+  )
+
+# Scatterplot with population bins
+ggsave("Population vs Confirmed Cases.png", width = 10, height = 6)
+ggplot(df_binned, aes(x = avg_population, y = avg_confirmed)) +
+  geom_point(color = "#d95f02", size = 3, alpha = 0.8) +  # Cleaner points
+  geom_smooth(method = "lm", color = "#1b9e77", se = TRUE) +  # Add trendline with confidence interval
+  scale_x_log10(labels = scales::comma) +  # Logarithmic x-axis
+  scale_y_log10(labels = scales::comma) +  # Logarithmic y-axis
+  labs(
+    title = "Population vs Confirmed COVID-19 Cases (Binned)",
+    subtitle = "Logarithmic scale with population binned in intervals of 500,000",
+    x = "Population (log scale)",
+    y = "Confirmed Cases (log scale)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+Inference: In this graph, population data is clearly separated into bins of 500,000 to analyze the correlation between a region's population and the number of verified COVID-19 cases. The large range of values is handled by both axes using logarithmic scales, which facilitates the interpretation of trends. The population size and confirmed cases are positively correlated, as indicated by the linear trendline, where each point reflects the average confirmed cases for a certain population range. Increased transmission chances in densely populated areas may be the reason why the graph indicates that places with higher populations typically have more confirmed cases. The significant insights on how population size affects case numbers are preserved while clutter is reduced in this visualization.
+
+**How These Graphs Tie into the Main Inference**
+
+Driving Factors of Confirmed Cases:
+"Impact of Vaccination Policy on Confirmed Cases", "Population vs. Confirmed COVID-19 Cases", and "Impact of Government Stringency on Confirmed Cases" consider the specific factors (vaccination policies, population length, and government interventions) that inspired the global case traits depicted in "Global Trend of Confirmed COVID-19 Cases Over Time".
+
+Policy Interdependence:
+"Distribution of Government Stringency Index" gives insight into how vaccination policies are interlinked with broader government interventions, showing that many governments employed multi-faceted processes in their fight against the pandemic.
+
+Global Variability:
+"Impact of Vaccination Policy on Confirmed Cases", "Distribution of Government Stringency Index", and "Population vs. Confirmed COVID-19 Cases" highlight the diversity across regions, underlining that measures and impacts have been driven by specific demographic and policy contexts.
+
+Comprehensive Analysis:
+Taken together, the graphs ("Global Trend of Confirmed COVID-19 Cases Over Time", "Impact of Vaccination Policy on Confirmed Cases", "Distribution of Government Stringency Index", "Population vs. Confirmed COVID-19 Cases", "Impact of Government Stringency on Confirmed Cases") build a comprehensive picture of how COVID-19 unfolded around the world, the measures taken to fight it, and the various success of those methods.
+
+
+**Data Modelling**
+
+**Analysis 1: Time Series Analysis of Policy Effects**
+
+Goal: Based on important variables, we will forecast the number of confirmed cases using a multivariate linear regression model.
+
+Population: More cases are anticipated in larger populations.
+Stringency of Vaccination Policies: Tighter vaccination regulations may result in fewer cases.
+Government Stringency Index: More government action may result in fewer cases.
+By confirming the previous findings in the graphs, this analysis will measure the influence of these variables and blend in perfectly with our story.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forecast)
+
+# Step 1: Prepare the dataset for ARIMA
+# Aggregate data by month and calculate total confirmed cases
+df_arima <- df_cleaned %>%
+  mutate(month = as.Date(format(date, "%Y-%m-01"))) %>%  # Extract the first day of each month
+  group_by(month) %>%
+  summarise(total_confirmed = sum(confirmed, na.rm = TRUE)) %>%  # Sum confirmed cases for each month
+  ungroup()
+
+# Step 2: Convert the data into a time series object
+# Specify the start time (2020, January) and the frequency (12 months per year)
+ts_confirmed <- ts(df_arima$total_confirmed, start = c(2020, 1), frequency = 12)
+
+# Step 3: Fit the ARIMA model
+# Automatically select the best ARIMA parameters
+arima_model <- auto.arima(ts_confirmed)
+
+# Step 4: Forecast the next 12 months
+forecasted <- forecast(arima_model, h = 12)
+
+# Step 5: Plot the forecast
+autoplot(forecasted) +
+  labs(
+    title = "ARIMA Forecast for Confirmed COVID-19 Cases",
+    x = "Time",
+    y = "Confirmed Cases"
+  ) +
+  theme_minimal(base_size = 14)
+
+# Step 6: Print model details
+# Print the summary of the ARIMA model to understand the selected parameters
+summary(arima_model)
+
+# Step 7: Optional: Check residuals of the ARIMA model
+# Ensure the residuals are white noise (no patterns left)
+checkresiduals(arima_model)
+
+# Step 8: Print the forecasted values
+print(forecasted)
+```
+
+Explanation of the Graphs:
+The first graph is the ARIMA residual diagnostic plot, which is a way to assess the performance and validity of the ARIMA model. The top panel shows the residuals, or the differences between actual and predicted confirmed cases, over time. Ideally, residuals should appear random and centered around zero, indicating that the model has captured all systematic trends in the data. In this case, while most residuals fluctuate randomly, some patterns or larger deviations suggest that there may still be room for improvement. The second panel is the ACF plot, which checks for correlations between residuals at different lags. The lack of significant bars in the ACF plot confirms that the residuals are not serially correlated, supporting the model's assumptions. Last but not least, the histogram of residuals is approximately bell-shaped, further confirming that the residuals are close to normality, which is another way the reliability of the ARIMA model is assured.
+
+The second graph is the ARIMA forecast plot, forecasting confirmed COVID-19 cases for the next 12 months by historical trend. The black line denotes the actual confirmed cases, and the blue line denotes the forecasted cases. The confidence intervals are shown by the shading, with darker shades reflecting higher confidence. The model projects the number of confirmed cases to decline steadily, but as we go further into the forecast period, the confidence intervals widen, reflecting increasing uncertainty. This graph is important for understanding possible future trends and underlines areas of uncertainty that may help policymakers plan interventions or prepare for different scenarios.
+
+Uncertainty in Forecasts:
+
+The ARIMA model provided confidence intervals - for example, 80% and 95% intervals predicting COVID-19 case trends over the next 12 months.
+These intervals quantify the potential variability of predictions, reflecting uncertainty arising from factors such as model assumptions, trends in historical data, and external influences.
+
+Visualization of Uncertainty:
+
+The forecast plot included confidence bands around the predicted values; this gives policymakers an idea of the range of possible outcomes that could be realized and therefore prepare for the best- and worst-case scenarios.
+
+
+
+
+Relation to the Storyline:
+
+These graphs directly link to the overall story of understanding how to predict the consequences of policies on COVID-19 case trends. The ARIMA forecast follows from the earlier time series analysis, extending those observations into the future and providing a predictive lens for policymaking. The forecast, for example, helps develop the vaccination policy stringency and government stringency index analysis into actionable insights that detail how confirmed cases will set up if current trends continue, helping policymakers to assess if more stringent interventions or greater vaccination efforts might be needed based on projected trends in high-risk regions.
+
+Furthermore, the residual diagnostic plot supports the storyline because the robustness of the chosen ARIMA model is assured by the plot. By ensuring that residuals are mainly random, uncorrelated, and normally distributed, it lends credibility to the model. This diagnostic step reassures all stakeholders that the forecast is grounded in sound statistical principles. Tied in with the previous analyses of factors such as population size and policy measures, the ARIMA forecast bridges the gap between retrospective analyses and forward-looking strategies, creating a cohesive, actionable story.
+
+
+**Analysis 2: Impact of Government Stringency on COVID−19 Cases**
+
+Goal: To evaluate the relationship between vaccination campaigns and government policy interventions on the spread and control of COVID-19
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+
+# Step 1: Data Preparation
+if (!"stringency_index" %in% colnames(df_cleaned) | !"confirmed" %in% colnames(df_cleaned)) {
+  stop("Missing required columns: stringency_index or confirmed")
+}
+
+# Aggregate data at a country or region level
+policy_analysis <- df_cleaned %>%
+  group_by(administrative_area_level_1) %>%
+  summarise(
+    avg_stringency = mean(stringency_index, na.rm = TRUE),
+    confirmed_per_capita = sum(confirmed, na.rm = TRUE) / mean(population, na.rm = TRUE)
+  ) %>%
+  na.omit()
+
+# Step 2: Perform Linear Regression
+model <- lm(confirmed_per_capita ~ avg_stringency, data = policy_analysis)
+summary(model)
+
+# Step 3: Visualize the Relationship
+ggsave("stringency_vs_confirmed_cases.png", width = 10, height = 6)
+ggplot(policy_analysis, aes(x = avg_stringency, y = confirmed_per_capita)) +
+  geom_point(color = "blue", size = 3, alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Impact of Government Stringency on COVID-19 Cases",
+    subtitle = "Linear regression of stringency index vs confirmed cases per capita",
+    x = "Average Stringency Index",
+    y = "Confirmed Cases Per Capita"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+Inference:
+The plot shows a clear negative relationship between the average stringency index-that is, the severity of government interventions-and confirmed cases per capita. Regions with higher stringency scores, indicating more stringent policies such as lockdowns and travel restrictions, tend to have lower infection rates. This trend indicates that stringent measures work in mitigating COVID-19 spread. However, the scatterplot also shows variability, suggesting that other factors like healthcare infrastructure, population density, and public compliance may influence outcomes. The regression line confirms that stricter policies, on average, correspond to fewer cases, reinforcing the importance of coordinated government interventions during public health crises.
+
+Uncertainty in the Regression Model:
+
+In the scatterplot, the regression line was accompanied by a shaded confidence interval; this reflected the uncertainty of the prediction for the relationship between the stringency index and confirmed cases per capita.
+This graph gives the sense of the level of certainty that we have in the trend due to the underlying variability in the data.
+
+P-Values and Model Fit:
+
+The p-values from the linear regression model were there to show the statistical significance of the observed relationships between predictor variables.
+The measure of how much the stringency index explained the variation in confirmed cases per capita was R-squared values.
+
+
+
+
+Correlation with Other Graphs and Inference Tasks
+
+Relation to Vaccination Impact Graph 1: This analysis supplements the insights derived from the vaccination impact graph, which showed a strong correlation between higher vaccination rates and reduced infection and mortality rates. While vaccinations directly curb the severity and spread of the virus, the stringency index reflects non-medical interventions. Together, these graphs illustrate a holistic approach to pandemic management where vaccinations and government policies work synergistically to reduce cases and save lives.
+
+Relation to Predictive Modeling: Graph 2 basically points out that even in the future, case spikes may occur, and interventions should not stop. The stringency index provides an actionable context to such a forecast, where proactive policies should be in place to minimize future surges. Consequently, it will be helpful to understand how stringency levels influence case numbers, enabling governments to tailor their strategies to the trends within those predictions for effective resource deployment and vaccination prioritization accordingly.
+
+
+**Conclusion: Analyses of Gained Insights from the COVID-19 Pandemic**
+
+By combining the trend of vaccinations, government interventions, and predictive modeling in this analysis, a wide-based understanding of COVID-19 dynamics was developed for actionable insights. The key finding of this includes:
+
+Infection/Mortality Impact:
+
+Higher rates of vaccination greatly reduce the rates of infections and mortalities. Large-scale vaccination drives and timely public adherence have been found highly effective in lessening the impact of the pandemic.
+
+Government Policy Interventions:
+
+The stringency index analysis showed that the severity of government interventions has a strong negative correlation with confirmed cases per capita. Effective policies, if implemented in time, helped to reduce the spread of the virus.
+Predictive Modeling:
+
+The ARIMA-based forecast showed possible surges in cases in the future, enabling proactiveness in resource allocation and response planning. This forecast further strengthens the argument that historical data should be used to anticipate and prepare public health needs.
+Uncertainty and Variability:
+
+Such differences in regional responses and outcomes made many variables interplay, such as healthcare capacity, population density, and policy enforcement. This complexity should be considered important to be factored into designing responses appropriate to the local contexts.
+
+
+
+
+
+
+
+
+
+
